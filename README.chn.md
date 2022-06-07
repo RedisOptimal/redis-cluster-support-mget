@@ -1,4 +1,4 @@
-#Redis Cluster支持mget/mset等批量操作
+# Redis Cluster支持mget/mset等批量操作
 让Redis集群支持批量操作，对于分布于相同节点上，但位于不同的slot内的key不再进行限制。
 
 ### Redis使用版本
