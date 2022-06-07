@@ -1,0 +1,18 @@
+diff --git a/src/cluster.c b/src/cluster.c
+index 5d8c14274..da04bde8c 100644
+--- a/src/cluster.c
++++ b/src/cluster.c
+@@ -5075,7 +5075,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
+                 /* If it is not the first key, make sure it is exactly
+                  * the same key as the first we saw. */
+                 if (!equalStringObjects(firstkey,thiskey)) {
+-                    if (slot != thisslot) {
++                    if (slot != thisslot && n != server.cluster->slots[thisslot]) {
+                         /* Error: multiple keys from different slots. */
+                         getKeysFreeResult(keyindex);
+                         if (error_code)
+@@ -5238,3 +5238,4 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
+     }
+     return 0;
+ }
++
