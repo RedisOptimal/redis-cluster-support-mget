@@ -1,0 +1,316 @@
+diff --git a/src/main/java/redis/clients/jedis/BinaryJedisCluster.java b/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
+index 855928b9..2958cdb2 100644
+--- a/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
++++ b/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
+@@ -8,14 +8,20 @@ import redis.clients.jedis.params.GeoRadiusParam;
+ import redis.clients.jedis.params.SetParams;
+ import redis.clients.jedis.params.ZAddParams;
+ import redis.clients.jedis.params.ZIncrByParams;
++import redis.clients.jedis.util.JedisClusterCRC16;
+ import redis.clients.jedis.util.JedisClusterHashTagUtil;
+ import redis.clients.jedis.util.KeyMergeUtil;
++import redis.clients.jedis.util.Pair;
+ import redis.clients.jedis.util.SafeEncoder;
+ 
+ import java.io.Closeable;
++import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
+ import javax.net.ssl.HostnameVerifier;
+ import javax.net.ssl.SSLParameters;
+ import javax.net.ssl.SSLSocketFactory;
+@@ -1529,6 +1535,34 @@ public class BinaryJedisCluster implements BinaryJedisClusterCommands,
+     }.runBinary(keys.length, keys);
+   }
+ 
++  @Override
++  public List<byte[]> mgetSeries(byte[]... keys) {
++    Map<JedisPool, List<Pair<JedisPool, byte[]>>> keysDistributeMap = Stream.of(keys)
++            .map(key -> Pair.of(connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key)), key))
++            .collect(Collectors.groupingBy(Pair::getFirst));
++    List<byte[]> values = new ArrayList<>(keys.length);
++    Map<byte[], byte[]> keyValues = new HashMap<>(keys.length);
++
++    for (List<Pair<JedisPool, byte[]>> list : keysDistributeMap.values()) {
++      int partialLength = list.size();
++      byte[][] partialKeys = new byte[partialLength][];
++      for (int i = 0;i < partialLength; ++i) partialKeys[i] = list.get(i).getSecond();
++      List<byte[]> partialValues = new JedisClusterCommand<List<byte[]>>(connectionHandler, maxAttempts) {
++        @Override
++        public List<byte[]> execute(Jedis connection) {
++          return connection.mget(partialKeys);
++        }
++      }.runBinary(partialLength, partialKeys);
++
++      for (int i = 0;i < partialLength; ++i) keyValues.put(partialKeys[i], partialValues.get(i));
++    }
++
++    for (int i = 0;i < keys.length; ++i) values.add(keyValues.get(keys[i]));
++
++    return values;
++
++  }
++
+   @Override
+   public String mset(final byte[]... keysvalues) {
+     byte[][] keys = new byte[keysvalues.length / 2][];
+diff --git a/src/main/java/redis/clients/jedis/JedisCluster.java b/src/main/java/redis/clients/jedis/JedisCluster.java
+index 81106bc5..077cf306 100644
+--- a/src/main/java/redis/clients/jedis/JedisCluster.java
++++ b/src/main/java/redis/clients/jedis/JedisCluster.java
+@@ -8,19 +8,25 @@ import redis.clients.jedis.params.ZIncrByParams;
+ import redis.clients.jedis.commands.JedisClusterCommands;
+ import redis.clients.jedis.commands.JedisClusterScriptingCommands;
+ import redis.clients.jedis.commands.MultiKeyJedisClusterCommands;
++import redis.clients.jedis.util.JedisClusterCRC16;
+ import redis.clients.jedis.util.JedisClusterHashTagUtil;
+ import redis.clients.jedis.util.KeyMergeUtil;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
++import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
+ import java.util.Set;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
+ import javax.net.ssl.HostnameVerifier;
+ import javax.net.ssl.SSLParameters;
+ import javax.net.ssl.SSLSocketFactory;
+ 
+ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
++import redis.clients.jedis.util.Pair;
+ 
+ public class JedisCluster extends BinaryJedisCluster implements JedisClusterCommands,
+     MultiKeyJedisClusterCommands, JedisClusterScriptingCommands {
+@@ -1567,6 +1573,34 @@ public class JedisCluster extends BinaryJedisCluster implements JedisClusterComm
+     }.run(keys.length, keys);
+   }
+ 
++  @Override
++  public List<String> mgetSeries(String... keys) {
++    Map<JedisPool, List<Pair<JedisPool, String>>> keysDistributeMap = Stream.of(keys)
++            .map(key -> Pair.of(connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key)), key))
++            .collect(Collectors.groupingBy(Pair::getFirst));
++    List<String> values = new ArrayList<>(keys.length);
++    Map<String, String> keyValues = new HashMap<>(keys.length);
++
++    for (List<Pair<JedisPool, String>> list : keysDistributeMap.values()) {
++      int partialLength = list.size();
++      String[] partialKeys = new String[partialLength];
++      for (int i = 0;i < partialLength; ++i) partialKeys[i] = list.get(i).getSecond();
++      List<String> partialValues = new JedisClusterCommand<List<String>>(connectionHandler, maxAttempts) {
++        @Override
++        public List<String> execute(Jedis connection) {
++          return connection.mget(partialKeys);
++        }
++      }.run(partialLength, partialKeys);
++
++      for (int i = 0;i < partialLength; ++i) keyValues.put(partialKeys[i], partialValues.get(i));
++    }
++
++    for (int i = 0;i < keys.length; ++i) values.add(keyValues.get(keys[i]));
++
++    return values;
++
++  }
++
+   @Override
+   public String mset(final String... keysvalues) {
+     String[] keys = new String[keysvalues.length / 2];
+diff --git a/src/main/java/redis/clients/jedis/JedisClusterCommand.java b/src/main/java/redis/clients/jedis/JedisClusterCommand.java
+index e26e2c2c..8391df16 100644
+--- a/src/main/java/redis/clients/jedis/JedisClusterCommand.java
++++ b/src/main/java/redis/clients/jedis/JedisClusterCommand.java
+@@ -1,6 +1,7 @@
+ package redis.clients.jedis;
+ 
+ import redis.clients.jedis.exceptions.JedisAskDataException;
++import redis.clients.jedis.exceptions.JedisClusterException;
+ import redis.clients.jedis.exceptions.JedisClusterMaxAttemptsException;
+ import redis.clients.jedis.exceptions.JedisClusterOperationException;
+ import redis.clients.jedis.exceptions.JedisConnectionException;
+@@ -30,19 +31,24 @@ public abstract class JedisClusterCommand<T> {
+       throw new JedisClusterOperationException("No way to dispatch this command to Redis Cluster.");
+     }
+ 
+-    // For multiple keys, only execute if they all share the same connection slot.
+-    int slot = JedisClusterCRC16.getSlot(keys[0]);
+-    if (keys.length > 1) {
+-      for (int i = 1; i < keyCount; i++) {
+-        int nextSlot = JedisClusterCRC16.getSlot(keys[i]);
+-        if (slot != nextSlot) {
+-          throw new JedisClusterOperationException("No way to dispatch this command to Redis "
+-              + "Cluster because keys have different slots.");
++    // For multiple keys, does not require all keys are same slot.
++    JedisPool jedisPool = null;
++    for (String key : keys) {
++      if (jedisPool == null) {
++        jedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
++        if (jedisPool == null) {
++          throw new JedisClusterException("Panic!! Slot have no node, redis cluster is DOWN or report BUG.");
++        }
++      } else {
++        JedisPool thisJedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
++        if (thisJedisPool != jedisPool) {
++          throw new JedisClusterException("No way to dispatch this command to Redis Cluster "
++                  + "because keys have different nodes.");
+         }
+       }
+     }
+ 
+-    return runWithRetries(slot, this.maxAttempts, false, null);
++    return runWithRetries(jedisPool, this.maxAttempts);
+   }
+ 
+   public T runBinary(byte[] key) {
+@@ -54,19 +60,25 @@ public abstract class JedisClusterCommand<T> {
+       throw new JedisClusterOperationException("No way to dispatch this command to Redis Cluster.");
+     }
+ 
+-    // For multiple keys, only execute if they all share the same connection slot.
+-    int slot = JedisClusterCRC16.getSlot(keys[0]);
+-    if (keys.length > 1) {
+-      for (int i = 1; i < keyCount; i++) {
+-        int nextSlot = JedisClusterCRC16.getSlot(keys[i]);
+-        if (slot != nextSlot) {
+-          throw new JedisClusterOperationException("No way to dispatch this command to Redis "
+-              + "Cluster because keys have different slots.");
++    // For multiple keys, does not require all keys are same slot.
++    JedisPool jedisPool = null;
++    for (byte[] key : keys) {
++      if (jedisPool == null) {
++        jedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
++        if (jedisPool == null) {
++          throw new JedisClusterException("Panic!! Slot have no node, redis cluster is DOWN or report BUG.");
++        }
++      } else {
++        JedisPool thisJedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
++        if (thisJedisPool != jedisPool) {
++          throw new JedisClusterException("No way to dispatch this command to Redis Cluster "
++                  + "because keys have different nodes.");
+         }
+       }
+     }
+ 
+-    return runWithRetries(slot, this.maxAttempts, false, null);
++    return runWithRetries(jedisPool, this.maxAttempts);
++
+   }
+ 
+   public T runWithAnyNode() {
+@@ -81,6 +93,50 @@ public abstract class JedisClusterCommand<T> {
+     }
+   }
+ 
++  private T runWithRetries(final JedisPool node, int attempts) {
++    if (attempts <= 0) {
++      throw new JedisClusterMaxAttemptsException("No more cluster attempts left.");
++    }
++
++    Jedis connection = null;
++    try {
++      connection = node.getResource();
++      return execute(connection);
++    } catch (JedisNoReachableClusterNodeException jnrcne) {
++      throw jnrcne;
++    } catch (JedisConnectionException jce) {
++      // release current connection before recursion
++      releaseConnection(connection);
++      connection = null;
++
++      if (attempts <= 1) {
++        //We need this because if node is not reachable anymore - we need to finally initiate slots renewing,
++        //or we can stuck with cluster state without one node in opposite case.
++        //But now if maxAttempts = 1 or 2 we will do it too often. For each time-outed request.
++        //TODO make tracking of successful/unsuccessful operations for node - do renewing only
++        //if there were no successful responses from this node last few seconds
++        this.connectionHandler.renewSlotCache();
++      }
++
++      return runWithRetries(node, attempts - 1);
++    } catch (JedisRedirectionException jre) {
++      // if MOVED redirection occurred,
++      if (jre instanceof JedisMovedDataException) {
++        // it rebuilds cluster's slot cache
++        // recommended by Redis cluster specification
++        this.connectionHandler.renewSlotCache(connection);
++      }
++
++      // release current connection before recursion or renewing
++      releaseConnection(connection);
++      connection = null;
++      throw new JedisClusterException(jre);
++    } finally {
++      releaseConnection(connection);
++    }
++  }
++
++
+   private T runWithRetries(final int slot, int attempts, boolean tryRandomNode, JedisRedirectionException redirect) {
+     if (attempts <= 0) {
+       throw new JedisClusterMaxAttemptsException("No more cluster attempts left.");
+diff --git a/src/main/java/redis/clients/jedis/JedisClusterConnectionHandler.java b/src/main/java/redis/clients/jedis/JedisClusterConnectionHandler.java
+index ce891516..74487c8b 100644
+--- a/src/main/java/redis/clients/jedis/JedisClusterConnectionHandler.java
++++ b/src/main/java/redis/clients/jedis/JedisClusterConnectionHandler.java
+@@ -49,6 +49,8 @@ public abstract class JedisClusterConnectionHandler implements Closeable {
+ 
+   abstract Jedis getConnectionFromSlot(int slot);
+ 
++  abstract JedisPool getNodeFromSlot(int slot);
++
+   public Jedis getConnectionFromNode(HostAndPort node) {
+     return cache.setupNodeIfNotExist(node).getResource();
+   }
+diff --git a/src/main/java/redis/clients/jedis/JedisSlotBasedConnectionHandler.java b/src/main/java/redis/clients/jedis/JedisSlotBasedConnectionHandler.java
+index 6deb39c7..1cc7373b 100644
+--- a/src/main/java/redis/clients/jedis/JedisSlotBasedConnectionHandler.java
++++ b/src/main/java/redis/clients/jedis/JedisSlotBasedConnectionHandler.java
+@@ -104,4 +104,15 @@ public class JedisSlotBasedConnectionHandler extends JedisClusterConnectionHandl
+       }
+     }
+   }
++
++  @Override
++  public JedisPool getNodeFromSlot(int slot) {
++    JedisPool connectionPool = cache.getSlotPool(slot);
++    if (connectionPool == null) {
++      renewSlotCache(); //It's abnormal situation for cluster mode, that we have just nothing for slot, try to rediscover state
++      connectionPool = cache.getSlotPool(slot);
++    }
++    return connectionPool;
++  }
++
+ }
+diff --git a/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java b/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
+index 6b758a21..fd772c0c 100644
+--- a/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
++++ b/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
+@@ -24,6 +24,8 @@ public interface MultiKeyBinaryJedisClusterCommands {
+ 
+   List<byte[]> mget(byte[]... keys);
+ 
++  List<byte[]> mgetSeries(byte[]... keys);
++
+   String mset(byte[]... keysvalues);
+ 
+   Long msetnx(byte[]... keysvalues);
+diff --git a/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java b/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
+index 9e44b34a..60256370 100644
+--- a/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
++++ b/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
+@@ -23,6 +23,8 @@ public interface MultiKeyJedisClusterCommands {
+ 
+   List<String> mget(String... keys);
+ 
++  List<String> mgetSeries(String... keys);
++
+   String mset(String... keysvalues);
+ 
+   Long msetnx(String... keysvalues);
