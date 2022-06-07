@@ -1,0 +1,15 @@
+diff --git a/pom.xml b/pom.xml
+index 1832993f..3474b88f 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -110,8 +110,8 @@
+ 				<artifactId>maven-compiler-plugin</artifactId>
+ 				<version>3.1</version>
+ 				<configuration>
+-					<source>1.7</source>
+-					<target>1.7</target>
++					<source>1.8</source>
++					<target>1.8</target>
+ 				</configuration>
+ 			</plugin>
+ 			<plugin>

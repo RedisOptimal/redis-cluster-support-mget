@@ -9,5 +9,5 @@
 
 ### ChangeLog
 
-* Jedis新增接口mgetSeries/msetSerise
+* Jedis新增接口mgetSeries/msetSeries
 * 基于JedisPool封装RedisClient
