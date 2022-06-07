@@ -124,7 +124,7 @@ index 81106bc5..077cf306 100644
    public String mset(final String... keysvalues) {
      String[] keys = new String[keysvalues.length / 2];
 diff --git a/src/main/java/redis/clients/jedis/JedisClusterCommand.java b/src/main/java/redis/clients/jedis/JedisClusterCommand.java
-index e26e2c2c..8391df16 100644
+index e26e2c2c..0e6e1589 100644
 --- a/src/main/java/redis/clients/jedis/JedisClusterCommand.java
 +++ b/src/main/java/redis/clients/jedis/JedisClusterCommand.java
 @@ -1,6 +1,7 @@
@@ -158,7 +158,7 @@ index e26e2c2c..8391df16 100644
 +      } else {
 +        JedisPool thisJedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
 +        if (thisJedisPool != jedisPool) {
-+          throw new JedisClusterException("No way to dispatch this command to Redis Cluster "
++          throw new JedisClusterOperationException("No way to dispatch this command to Redis Cluster "
 +                  + "because keys have different nodes.");
          }
        }
@@ -192,7 +192,7 @@ index e26e2c2c..8391df16 100644
 +      } else {
 +        JedisPool thisJedisPool = connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key));
 +        if (thisJedisPool != jedisPool) {
-+          throw new JedisClusterException("No way to dispatch this command to Redis Cluster "
++          throw new JedisClusterOperationException("No way to dispatch this command to Redis Cluster "
 +                  + "because keys have different nodes.");
          }
        }
@@ -314,3 +314,46 @@ index 9e44b34a..60256370 100644
    String mset(String... keysvalues);
  
    Long msetnx(String... keysvalues);
+diff --git a/src/main/java/redis/clients/jedis/util/Pair.java b/src/main/java/redis/clients/jedis/util/Pair.java
+new file mode 100644
+index 00000000..69b41413
+--- /dev/null
++++ b/src/main/java/redis/clients/jedis/util/Pair.java
+@@ -0,0 +1,37 @@
++package redis.clients.jedis.util;
++
++/**
++ * @author yuanzhe
++ * @createTime 2022/6/7
++ * @description
++ */
++
++public class Pair<K, V> {
++  private K first;
++  private V second;
++
++  public static <K, V> Pair<K, V> of(K first, V second) {
++    return new Pair<K, V>(first, second);
++  }
++
++  public Pair(K first, V second) {
++    this.first = first;
++    this.second = second;
++  }
++
++  public K getFirst() {
++    return first;
++  }
++
++  public void setFirst(K first) {
++    this.first = first;
++  }
++
++  public V getSecond() {
++    return second;
++  }
++
++  public void setSecond(V second) {
++    this.second = second;
++  }
++}
