@@ -1,0 +1,8 @@
+[submodule "jedis@3"]
+	path = jedis@3
+	url = git@github.com:redis/jedis.git
+	branch = 3
+[submodule "redis@3.2"]
+	path = redis@3.2
+	url = git@github.com:redis/redis.git
+	branch = 3.2
