@@ -1,0 +1,180 @@
+diff --git a/src/main/java/redis/clients/jedis/BinaryJedisCluster.java b/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
+index 2958cdb2..514eabc6 100644
+--- a/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
++++ b/src/main/java/redis/clients/jedis/BinaryJedisCluster.java
+@@ -4,6 +4,7 @@ import redis.clients.jedis.commands.BinaryJedisClusterCommands;
+ import redis.clients.jedis.commands.JedisClusterBinaryScriptingCommands;
+ import redis.clients.jedis.commands.MultiKeyBinaryJedisClusterCommands;
+ import redis.clients.jedis.commands.ProtocolCommand;
++import redis.clients.jedis.exceptions.JedisException;
+ import redis.clients.jedis.params.GeoRadiusParam;
+ import redis.clients.jedis.params.SetParams;
+ import redis.clients.jedis.params.ZAddParams;
+@@ -16,6 +17,7 @@ import redis.clients.jedis.util.SafeEncoder;
+ 
+ import java.io.Closeable;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -1579,6 +1581,56 @@ public class BinaryJedisCluster implements BinaryJedisClusterCommands,
+     }.runBinary(keys.length, keys);
+   }
+ 
++  @Override
++  public String msetSeries(byte[]... keysvalues) {
++    Map<byte[], byte[]> keysValuesMap = new HashMap<>(keysvalues.length / 2);
++    if (keysvalues.length % 2 != 0) {
++      throw new JedisException("Key-value pair not match.");
++    }
++
++    for (int keyIdx = 0; keyIdx < keysvalues.length / 2; keyIdx++) {
++      keysValuesMap.put(keysvalues[keyIdx * 2], keysvalues[keyIdx * 2 + 1]);
++    }
++
++    Map<JedisPool, List<Pair<JedisPool, byte[]>>> keysDistributeMap = keysValuesMap.keySet().stream()
++            .map(key -> Pair.of(connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key)), key))
++            .collect(Collectors.groupingBy(Pair::getFirst));
++
++    List<byte[]> failedKeys = new ArrayList<>(keysvalues.length / 2);
++
++    for (List<Pair<JedisPool, byte[]>> list : keysDistributeMap.values()) {
++      int partialLength = list.size();
++      byte[][] partialKeys = new byte[partialLength][];
++      byte[][] partialKeysValues = new byte[partialLength * 2][];
++      for (int i = 0; i < partialLength; ++i) {
++        byte[] key = list.get(i).getSecond();
++        partialKeys[i] = key;
++        partialKeysValues[2 * i] = key;
++        partialKeysValues[2 * i + 1] = keysValuesMap.get(key);
++      }
++      try {
++        String partialResult = new JedisClusterCommand<String>(connectionHandler, maxAttempts) {
++          @Override
++          public String execute(Jedis connection) {
++            return connection.mset(partialKeysValues);
++          }
++        }.runBinary(partialLength, partialKeys);
++        if (!"OK".equals(partialResult)) {
++          failedKeys.addAll(Arrays.asList(partialKeys));
++        }
++      } catch (Exception e) {
++        failedKeys.addAll(Arrays.asList(partialKeys));
++      }
++    }
++
++    if (failedKeys.size() != 0) {
++      throw new JedisException("Partial execute failed. Fail keys : " + failedKeys.stream()
++              .map(String::valueOf).collect(Collectors.joining(",")));
++    }
++
++    return "OK";
++  }
++
+   @Override
+   public Long msetnx(final byte[]... keysvalues) {
+     byte[][] keys = new byte[keysvalues.length / 2][];
+diff --git a/src/main/java/redis/clients/jedis/JedisCluster.java b/src/main/java/redis/clients/jedis/JedisCluster.java
+index 077cf306..da5f9032 100644
+--- a/src/main/java/redis/clients/jedis/JedisCluster.java
++++ b/src/main/java/redis/clients/jedis/JedisCluster.java
+@@ -1,6 +1,7 @@
+ package redis.clients.jedis;
+ 
+ import redis.clients.jedis.commands.ProtocolCommand;
++import redis.clients.jedis.exceptions.JedisException;
+ import redis.clients.jedis.params.GeoRadiusParam;
+ import redis.clients.jedis.params.SetParams;
+ import redis.clients.jedis.params.ZAddParams;
+@@ -13,6 +14,7 @@ import redis.clients.jedis.util.JedisClusterHashTagUtil;
+ import redis.clients.jedis.util.KeyMergeUtil;
+ 
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.List;
+@@ -1617,6 +1619,56 @@ public class JedisCluster extends BinaryJedisCluster implements JedisClusterComm
+     }.run(keys.length, keys);
+   }
+ 
++  @Override
++  public String msetSeries(String... keysvalues) {
++    Map<String, String> keysValuesMap = new HashMap<>(keysvalues.length / 2);
++    if (keysvalues.length % 2 != 0) {
++      throw new JedisException("Key-value pair not match.");
++    }
++
++    for (int keyIdx = 0; keyIdx < keysvalues.length / 2; keyIdx++) {
++      keysValuesMap.put(keysvalues[keyIdx * 2], keysvalues[keyIdx * 2 + 1]);
++    }
++
++    Map<JedisPool, List<Pair<JedisPool, String>>> keysDistributeMap = keysValuesMap.keySet().stream()
++            .map(key -> Pair.of(connectionHandler.getNodeFromSlot(JedisClusterCRC16.getSlot(key)), key))
++            .collect(Collectors.groupingBy(Pair::getFirst));
++
++    List<String> failedKeys = new ArrayList<>(keysvalues.length / 2);
++
++    for (List<Pair<JedisPool, String>> list : keysDistributeMap.values()) {
++      int partialLength = list.size();
++      String[] partialKeys = new String[partialLength];
++      String[] partialKeysValues = new String[partialLength * 2];
++      for (int i = 0; i < partialLength; ++i) {
++        String key = list.get(i).getSecond();
++        partialKeys[i] = key;
++        partialKeysValues[2 * i] = key;
++        partialKeysValues[2 * i + 1] = keysValuesMap.get(key);
++      }
++      try {
++        String partialResult = new JedisClusterCommand<String>(connectionHandler, maxAttempts) {
++          @Override
++          public String execute(Jedis connection) {
++            return connection.mset(partialKeysValues);
++          }
++        }.run(partialLength, partialKeys);
++        if (!"OK".equals(partialResult)) {
++          failedKeys.addAll(Arrays.asList(partialKeys));
++        }
++      } catch (Exception e) {
++        failedKeys.addAll(Arrays.asList(partialKeys));
++      }
++    }
++
++    if (failedKeys.size() != 0) {
++      throw new JedisException("Partial execute failed. Fail keys : " + failedKeys.stream().collect(Collectors.joining(",")));
++    }
++
++    return "OK";
++
++  }
++
+   @Override
+   public Long msetnx(final String... keysvalues) {
+     String[] keys = new String[keysvalues.length / 2];
+diff --git a/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java b/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
+index fd772c0c..a73d1c1a 100644
+--- a/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
++++ b/src/main/java/redis/clients/jedis/commands/MultiKeyBinaryJedisClusterCommands.java
+@@ -28,6 +28,8 @@ public interface MultiKeyBinaryJedisClusterCommands {
+ 
+   String mset(byte[]... keysvalues);
+ 
++  String msetSeries(byte[]... keysvalues);
++
+   Long msetnx(byte[]... keysvalues);
+ 
+   String rename(byte[] oldkey, byte[] newkey);
+diff --git a/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java b/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
+index 60256370..a9c4eee1 100644
+--- a/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
++++ b/src/main/java/redis/clients/jedis/commands/MultiKeyJedisClusterCommands.java
+@@ -27,6 +27,8 @@ public interface MultiKeyJedisClusterCommands {
+ 
+   String mset(String... keysvalues);
+ 
++  String msetSeries(String... keysvalues);
++
+   Long msetnx(String... keysvalues);
+ 
+   String rename(String oldkey, String newkey);
