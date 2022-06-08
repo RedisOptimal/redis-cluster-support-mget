@@ -1,0 +1,185 @@
+diff --git a/src/test/java/redis/clients/jedis/tests/commands/ClusterSeriesCommandsTest.java b/src/test/java/redis/clients/jedis/tests/commands/ClusterSeriesCommandsTest.java
+new file mode 100644
+index 00000000..ad07c152
+--- /dev/null
++++ b/src/test/java/redis/clients/jedis/tests/commands/ClusterSeriesCommandsTest.java
+@@ -0,0 +1,179 @@
++package redis.clients.jedis.tests.commands;
++
++
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++import org.junit.After;
++import org.junit.AfterClass;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++import redis.clients.jedis.HostAndPort;
++import redis.clients.jedis.Jedis;
++import redis.clients.jedis.JedisCluster;
++import redis.clients.jedis.JedisPoolConfig;
++import redis.clients.jedis.tests.HostAndPortUtil;
++import redis.clients.jedis.util.JedisClusterCRC16;
++
++/**
++ * @author yuanzhe
++ * @createTime 2022/6/7
++ * @description
++ */
++
++public class ClusterSeriesCommandsTest {
++  private Jedis node1;
++  private static Jedis node2;
++  private static Jedis node3;
++
++  private HostAndPort nodeInfo1 = HostAndPortUtil.getClusterServers().get(0);
++  private HostAndPort nodeInfo2 = HostAndPortUtil.getClusterServers().get(1);
++  private HostAndPort nodeInfo3 = HostAndPortUtil.getClusterServers().get(2);
++  private final Set<HostAndPort> jedisClusterNode = new HashSet<>();
++  JedisCluster jedisCluster;
++
++  @Before
++  public void setUp() throws InterruptedException {
++    node1 = new Jedis(nodeInfo1);
++    node1.auth("cluster");
++    node1.flushAll();
++
++    node2 = new Jedis(nodeInfo2);
++    node2.auth("cluster");
++    node2.flushAll();
++
++    node3 = new Jedis(nodeInfo3);
++    node3.auth("cluster");
++    node3.flushAll();
++
++    // ---- configure cluster
++
++    // add nodes to cluster
++    node1.clusterMeet(nodeInfo2.getHost(), nodeInfo2.getPort());
++    node1.clusterMeet(nodeInfo3.getHost(), nodeInfo3.getPort());
++
++    // split available slots across the three nodes
++    int slotsPerNode = JedisCluster.HASHSLOTS / 3;
++    int[] node1Slots = new int[slotsPerNode];
++    int[] node2Slots = new int[slotsPerNode + 1];
++    int[] node3Slots = new int[slotsPerNode];
++    for (int i = 0, slot1 = 0, slot2 = 0, slot3 = 0; i < JedisCluster.HASHSLOTS; i++) {
++      if (i < slotsPerNode) {
++        node1Slots[slot1++] = i;
++      } else if (i > slotsPerNode * 2) {
++        node3Slots[slot3++] = i;
++      } else {
++        node2Slots[slot2++] = i;
++      }
++    }
++
++    node1.clusterAddSlots(node1Slots);
++    node2.clusterAddSlots(node2Slots);
++    node3.clusterAddSlots(node3Slots);
++
++    waitForClusterReady();
++
++    jedisClusterNode.add(HostAndPortUtil.getClusterServers().get(0));
++    jedisCluster = new JedisCluster(jedisClusterNode, 2000, 2000, 5, "cluster", new JedisPoolConfig());
++  }
++
++  @Test
++  public void testMgetSeries() {
++    int TEST_SET_SIZE = 1_000;
++    String TEST_KEY_PREFIX = "test.series.mget.";
++    String[] keys = new String[TEST_SET_SIZE];
++
++    for (int i = 0; i < TEST_SET_SIZE; ++i) {
++      String key = TEST_KEY_PREFIX + i;
++      keys[i] = key;
++      jedisCluster.set(key, String.valueOf(i));
++    }
++
++    for (int i = 0; i < TEST_SET_SIZE; ++i) {
++      String key = keys[i];
++      String value = jedisCluster.get(key);
++      Assert.assertEquals("Value not equal, maybe redis memory is not enough.", String.valueOf(i), value);
++    }
++
++    List<String> values = jedisCluster.mgetSeries(keys);
++    Assert.assertEquals(TEST_SET_SIZE, values.size());
++    for (int i = 0; i < values.size(); ++i) {
++      Assert.assertEquals(String.valueOf(i), values.get(i));
++    }
++
++    values = jedisCluster.mgetSeries(keys[0], "nonexist-key0", keys[1], "nonexist-key1", keys[2]);
++    Assert.assertEquals(5, values.size());
++    Assert.assertEquals("0", values.get(0));
++    Assert.assertNull(values.get(1));
++    Assert.assertEquals("1", values.get(2));
++    Assert.assertNull(values.get(3));
++    Assert.assertEquals("2", values.get(4));
++  }
++
++
++  @Test
++  public void testMsetSeries() {
++    int TEST_SET_SIZE = 1_000;
++    String TEST_KEY_PREFIX = "test.series.mset.";
++    String[] keysvalues = new String[TEST_SET_SIZE * 2];
++    String[] keys = new String[TEST_SET_SIZE];
++
++    for (int i = 0;i < TEST_SET_SIZE; ++i) {
++      String key = TEST_KEY_PREFIX + i;
++      keys[i] = key;
++      keysvalues[2 * i] = key;
++      keysvalues[2 * i + 1] = String.valueOf(i);
++    }
++
++    jedisCluster.msetSeries(keysvalues);
++
++    for (int i = 0;i < TEST_SET_SIZE; ++i) {
++      Assert.assertEquals(String.valueOf(i), jedisCluster.get(keys[i]));
++    }
++  }
++
++  @AfterClass
++  public static void cleanUp() {
++    int slotTest = JedisClusterCRC16.getSlot("test");
++    int slot51 = JedisClusterCRC16.getSlot("51");
++    String node3Id = getNodeId(node3.clusterNodes());
++    node2.clusterSetSlotNode(slotTest, node3Id);
++    node2.clusterSetSlotNode(slot51, node3Id);
++    node2.clusterDelSlots(slotTest, slot51);
++  }
++
++  @After
++  public void tearDown() {
++    // clear all slots
++    int[] slotsToDelete = new int[JedisCluster.HASHSLOTS];
++    for (int i = 0; i < JedisCluster.HASHSLOTS; i++) {
++      slotsToDelete[i] = i;
++    }
++    node1.clusterDelSlots(slotsToDelete);
++    node2.clusterDelSlots(slotsToDelete);
++    node3.clusterDelSlots(slotsToDelete);
++  }
++
++  private static String getNodeId(String infoOutput) {
++    for (String infoLine : infoOutput.split("\n")) {
++      if (infoLine.contains("myself")) {
++        return infoLine.split(" ")[0];
++      }
++    }
++    return "";
++  }
++
++  private void waitForClusterReady() throws InterruptedException {
++    boolean clusterOk = false;
++    while (!clusterOk) {
++      if (node1.clusterInfo().split("\n")[0].contains("ok")
++              && node2.clusterInfo().split("\n")[0].contains("ok")
++              && node3.clusterInfo().split("\n")[0].contains("ok")) {
++        clusterOk = true;
++      }
++      Thread.sleep(50);
++    }
++  }
++}
